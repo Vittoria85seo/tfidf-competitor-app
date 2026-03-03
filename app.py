@@ -161,7 +161,16 @@ if run and scraped:
         )
         st.stop()
 
-    df = df.head(top_n)
+    # Take a balanced slice from each n-gram type so bigrams/trigrams are visible
+    per_type = max(top_n // 3, 10)
+    df = (
+        pd.concat([
+            df[df["N-gram Type"] == ng].head(per_type)
+            for ng in ["Unigram", "Bigram", "Trigram"]
+        ])
+        .sort_values("Avg Mentions (Competitors)", ascending=False)
+        .reset_index(drop=True)
+    )
 
     with st.spinner("Detecting languages…"):
         non_english = has_non_english(scraped)
