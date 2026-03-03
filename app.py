@@ -81,11 +81,21 @@ if run:
     progress.empty()
     status.empty()
 
-    # Surface scrape errors
-    for d in scraped:
-        if d["error"]:
-            tag = "Your page" if d["url"] == my_url else "Competitor"
-            st.warning(f"Scrape issue — {tag}: {d['url']}\n{d['error']}")
+    # Surface scrape errors + show word counts for all URLs
+    with st.expander("Scraping details (click to check what was captured)"):
+        for idx, d in enumerate(scraped):
+            label = "YOUR PAGE" if d["url"] == my_url else f"Competitor {idx}"
+            wc = d.get("word_count", len(d.get("body", "").split()))
+            if d["error"]:
+                st.error(f"{label}: {d['url']} — FAILED: {d['error']}")
+            elif wc < 50:
+                st.warning(f"{label}: {d['url']} — only {wc} words scraped (possible block)")
+            else:
+                st.success(f"{label}: {d['url']} — {wc} words scraped")
+            # Show text preview for your page only
+            if d["url"] == my_url and d.get("body"):
+                st.caption("Preview of your page body (first 300 chars):")
+                st.code(d["body"][:300])
 
     # TF-IDF
     custom_words = [w.strip() for w in custom_sw.split(",") if w.strip()] if custom_sw else None

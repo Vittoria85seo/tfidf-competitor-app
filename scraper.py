@@ -1,19 +1,30 @@
 import requests
 from bs4 import BeautifulSoup
 
+# Full browser-like headers to avoid blocks
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
-    )
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,it;q=0.8,de;q=0.7,fr;q=0.6",
+    "Accept-Encoding": "gzip, deflate, br",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Cache-Control": "max-age=0",
 }
 
-MIN_WORDS = 50  # if fewer words scraped, try JS fallback
+MIN_WORDS = 100  # if fewer words scraped, try JS fallback
 
 
 def _parse_soup(soup):
-    for tag in soup(["script", "style", "noscript"]):
+    for tag in soup(["script", "style", "noscript", "svg", "path"]):
         tag.decompose()
 
     meta_title = ""
@@ -41,13 +52,21 @@ def _parse_soup(soup):
         "headings": " ".join(headings),
         "body": body,
         "combined": combined,
+        "word_count": len(body.split()),
     }
 
 
 def _scrape_static(url):
-    resp = requests.get(url, headers=HEADERS, timeout=15)
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    # First request to get cookies (simulates a real browser visit)
+    resp = session.get(url, timeout=20, allow_redirects=True)
     resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
+    # Try lxml first (faster, more robust), fall back to html.parser
+    try:
+        soup = BeautifulSoup(resp.content, "lxml")
+    except Exception:
+        soup = BeautifulSoup(resp.text, "html.parser")
     return _parse_soup(soup)
 
 
@@ -55,13 +74,21 @@ def _scrape_playwright(url):
     from playwright.sync_api import sync_playwright  # optional dependency
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page(
-            extra_http_headers={"User-Agent": HEADERS["User-Agent"]}
+        ctx = browser.new_context(
+            user_agent=HEADERS["User-Agent"],
+            locale="en-US",
+            extra_http_headers={
+                "Accept-Language": HEADERS["Accept-Language"],
+            },
         )
+        page = ctx.new_page()
         page.goto(url, timeout=30000, wait_until="networkidle")
         content = page.content()
         browser.close()
-    soup = BeautifulSoup(content, "html.parser")
+    try:
+        soup = BeautifulSoup(content, "lxml")
+    except Exception:
+        soup = BeautifulSoup(content, "html.parser")
     return _parse_soup(soup)
 
 
@@ -73,13 +100,16 @@ def scrape_url(url):
         "headings": "",
         "body": "",
         "combined": "",
+        "word_count": 0,
     }
 
     try:
         result = _scrape_static(url)
-        if len(result["body"].split()) < MIN_WORDS:
+        if result["word_count"] < MIN_WORDS:
             try:
-                result = _scrape_playwright(url)
+                js_result = _scrape_playwright(url)
+                if js_result["word_count"] > result["word_count"]:
+                    result = js_result
             except Exception:
                 pass  # keep static result if playwright unavailable
         return {**result, "url": url, "error": None}
