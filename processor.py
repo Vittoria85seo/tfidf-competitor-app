@@ -142,11 +142,6 @@ def compute_tfidf(scraped_data, my_url, presence_threshold=0.3, custom_stopwords
 
             my_mention = int(my_counts[i])
             avg_comp_mentions = round(float(comp_counts[:, i].mean()), 1)
-
-            # Require competitors to mention the term at least once on average
-            if avg_comp_mentions < 1.0:
-                continue
-
             found = my_mention > 0
 
             rows.append({
