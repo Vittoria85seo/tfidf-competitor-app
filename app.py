@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-from scraper import scrape_url
+from scraper import scrape_url, parse_html_bytes
 from processor import compute_tfidf
 from translator import has_non_english, translate_terms
 
@@ -13,10 +13,6 @@ st.set_page_config(
 )
 
 st.title("TF-IDF Competitor Analysis")
-st.markdown(
-    "Compare keyword usage between your page and up to 10 competitors. "
-    "**First line = your URL**, remaining lines = competitor URLs."
-)
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -41,63 +37,110 @@ with st.sidebar:
         "Green rows = you mention this term more than competitors."
     )
 
-# ── URL input ─────────────────────────────────────────────────────────────────
-url_input = st.text_area(
-    "Paste URLs — one per line",
-    height=220,
-    placeholder=(
-        "https://yoursite.com/page\n"
-        "https://competitor1.com/page\n"
-        "https://competitor2.com/page\n"
-        "..."
-    ),
+# ── Input mode toggle ─────────────────────────────────────────────────────────
+mode = st.radio(
+    "How do you want to provide page content?",
+    ["Scrape from URLs", "Upload HTML files (recommended for blocked sites)"],
+    horizontal=True,
 )
 
-run = st.button("Run Analysis", type="primary", use_container_width=True)
+st.markdown("---")
 
-# ── Run ───────────────────────────────────────────────────────────────────────
-if run:
-    urls = [u.strip() for u in url_input.strip().splitlines() if u.strip()]
+scraped = []
+my_url = "my_page"
+run = False
 
-    if len(urls) < 2:
-        st.error("Please enter at least 2 URLs (your URL + at least 1 competitor).")
-        st.stop()
+if mode == "Scrape from URLs":
+    st.markdown("Paste all URLs below — **first line = your URL**, remaining lines = competitors.")
+    url_input = st.text_area(
+        "URLs (one per line)",
+        height=200,
+        placeholder=(
+            "https://yoursite.com/page\n"
+            "https://competitor1.com/page\n"
+            "https://competitor2.com/page\n"
+            "..."
+        ),
+    )
+    run = st.button("Run Analysis", type="primary", use_container_width=True)
 
-    my_url = urls[0]
-    all_urls = [my_url] + urls[1:11]  # cap at 10 competitors
+    if run:
+        urls = [u.strip() for u in url_input.strip().splitlines() if u.strip()]
+        if len(urls) < 2:
+            st.error("Please enter at least 2 URLs (your URL + at least 1 competitor).")
+            st.stop()
 
-    # Scraping
-    st.markdown("---")
-    progress = st.progress(0)
-    status = st.empty()
-    scraped = []
+        my_url = urls[0]
+        all_urls = [my_url] + urls[1:11]
 
-    for idx, url in enumerate(all_urls):
-        label = "Your page" if idx == 0 else f"Competitor {idx}"
-        status.text(f"Fetching {label}: {url}")
-        scraped.append(scrape_url(url))
-        progress.progress((idx + 1) / len(all_urls))
+        progress = st.progress(0)
+        status = st.empty()
+        for idx, url in enumerate(all_urls):
+            label = "Your page" if idx == 0 else f"Competitor {idx}"
+            status.text(f"Fetching {label}: {url}")
+            scraped.append(scrape_url(url))
+            progress.progress((idx + 1) / len(all_urls))
+        progress.empty()
+        status.empty()
 
-    progress.empty()
-    status.empty()
+        with st.expander("Scraping details"):
+            for idx, d in enumerate(scraped):
+                label = "YOUR PAGE" if d["url"] == my_url else f"Competitor {idx}"
+                wc = d.get("word_count", 0)
+                if d["error"]:
+                    st.error(f"{label}: {d['url']} — FAILED: {d['error']}")
+                elif wc < 50:
+                    st.warning(f"{label}: {d['url']} — only {wc} words (possible block)")
+                else:
+                    st.success(f"{label}: {d['url']} — {wc} words scraped")
+                if d["url"] == my_url and d.get("body"):
+                    st.caption("Body preview (first 300 chars):")
+                    st.code(d["body"][:300])
 
-    # Surface scrape errors + show word counts for all URLs
-    with st.expander("Scraping details (click to check what was captured)"):
-        for idx, d in enumerate(scraped):
-            label = "YOUR PAGE" if d["url"] == my_url else f"Competitor {idx}"
-            wc = d.get("word_count", len(d.get("body", "").split()))
-            if d["error"]:
-                st.error(f"{label}: {d['url']} — FAILED: {d['error']}")
-            elif wc < 50:
-                st.warning(f"{label}: {d['url']} — only {wc} words scraped (possible block)")
-            else:
-                st.success(f"{label}: {d['url']} — {wc} words scraped")
-            # Show text preview for your page only
-            if d["url"] == my_url and d.get("body"):
-                st.caption("Preview of your page body (first 300 chars):")
-                st.code(d["body"][:300])
+else:
+    st.markdown(
+        "**How to save HTML files from Chrome:**  \n"
+        "Open the page → press `Ctrl+S` → choose **Webpage, HTML Only** → save.  \n"
+        "Do this for your page and each competitor, then upload all files below."
+    )
+    my_file = st.file_uploader("Your page HTML file", type=["html", "htm"])
+    comp_files = st.file_uploader(
+        "Competitor HTML files (up to 10)", type=["html", "htm"], accept_multiple_files=True
+    )
+    run = st.button("Run Analysis", type="primary", use_container_width=True)
 
-    # TF-IDF
+    if run:
+        if not my_file:
+            st.error("Please upload your page HTML file.")
+            st.stop()
+        if not comp_files:
+            st.error("Please upload at least one competitor HTML file.")
+            st.stop()
+
+        my_url = my_file.name
+        my_result = parse_html_bytes(my_file.read(), url=my_file.name)
+        scraped = [my_result]
+
+        for f in comp_files[:10]:
+            scraped.append(parse_html_bytes(f.read(), url=f.name))
+
+        with st.expander("Parsing details"):
+            for d in scraped:
+                label = "YOUR PAGE" if d["url"] == my_url else f"Competitor: {d['url']}"
+                wc = d.get("word_count", 0)
+                if d["error"]:
+                    st.error(f"{label} — ERROR: {d['error']}")
+                elif wc < 50:
+                    st.warning(f"{label} — only {wc} words found")
+                else:
+                    st.success(f"{label} — {wc} words parsed")
+                if d["url"] == my_url and d.get("body"):
+                    st.caption("Body preview (first 300 chars):")
+                    st.code(d["body"][:300])
+
+
+# ── Process (runs after either input mode) ────────────────────────────────────
+if run and scraped:
     custom_words = [w.strip() for w in custom_sw.split(",") if w.strip()] if custom_sw else None
     with st.spinner("Computing TF-IDF scores…"):
         try:
@@ -114,13 +157,12 @@ if run:
     if df.empty:
         st.warning(
             "No terms passed the filters. "
-            "Try lowering the competitor presence slider or check that your URLs scraped successfully."
+            "Try lowering the competitor presence slider or check the parsing details above."
         )
         st.stop()
 
     df = df.head(top_n)
 
-    # Translation
     with st.spinner("Detecting languages…"):
         non_english = has_non_english(scraped)
 
@@ -129,7 +171,6 @@ if run:
             translations = translate_terms(df["Keyword / Phrase"].tolist())
             df.insert(1, "English Translation", df["Keyword / Phrase"].map(translations))
 
-    # Cache in session state
     st.session_state["df"] = df
     st.session_state["my_url"] = my_url
     st.session_state["scraped"] = scraped

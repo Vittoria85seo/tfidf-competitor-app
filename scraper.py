@@ -84,6 +84,20 @@ def _scrape_playwright(url):
     return _parse_soup(soup)
 
 
+def parse_html_bytes(html_bytes, url="manual"):
+    """Parse raw HTML bytes (from an uploaded file) instead of fetching a URL."""
+    empty = {
+        "meta_title": "", "meta_description": "",
+        "headings": "", "body": "", "combined": "", "word_count": 0,
+    }
+    try:
+        soup = BeautifulSoup(html_bytes, "html.parser")
+        result = _parse_soup(soup)
+        return {**result, "url": url, "error": None}
+    except Exception as e:
+        return {**empty, "url": url, "error": str(e)}
+
+
 def scrape_url(url):
     """Scrape a URL and return a content dict. Never raises — errors go in result['error']."""
     empty = {
