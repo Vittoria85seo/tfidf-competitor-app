@@ -130,8 +130,8 @@ def compute_tfidf(scraped_data, my_url, presence_threshold=0.3, custom_stopwords
             if not all(re.match(r'^[^\W\d_]+$', t, re.UNICODE) for t in tokens):
                 continue
 
-            # Drop very short unigrams (less than 3 real letters)
-            if ngram_range == (1, 1) and len(term) < 3:
+            # Drop short tokens (min 4 chars per token — filters 3-letter JS codes)
+            if any(len(t) < 4 for t in tokens):
                 continue
 
             # Presence = fraction of competitor pages where term appears (count > 0)
@@ -142,6 +142,11 @@ def compute_tfidf(scraped_data, my_url, presence_threshold=0.3, custom_stopwords
 
             my_mention = int(my_counts[i])
             avg_comp_mentions = round(float(comp_counts[:, i].mean()), 1)
+
+            # Require competitors to mention the term at least once on average
+            if avg_comp_mentions < 1.0:
+                continue
+
             found = my_mention > 0
 
             rows.append({
