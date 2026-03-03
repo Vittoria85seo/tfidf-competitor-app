@@ -165,7 +165,10 @@ if "df" in st.session_state:
     def clean(frame):
         return frame.drop(columns=["_opportunity"], errors="ignore").copy()
 
-    fmt = {"% Competitors Using": "{:.1f}%"}
+    fmt = {
+        "Avg Mentions (Competitors)": "{:.1f}",
+        "% Competitors Using": "{:.1f}%",
+    }
 
     # Row colouring: red = competitors mention more, green = you mention more
     def _color_row(row):

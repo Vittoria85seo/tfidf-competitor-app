@@ -59,14 +59,9 @@ def _parse_soup(soup):
 def _scrape_static(url):
     session = requests.Session()
     session.headers.update(HEADERS)
-    # First request to get cookies (simulates a real browser visit)
     resp = session.get(url, timeout=20, allow_redirects=True)
     resp.raise_for_status()
-    # Try lxml first (faster, more robust), fall back to html.parser
-    try:
-        soup = BeautifulSoup(resp.content, "lxml")
-    except Exception:
-        soup = BeautifulSoup(resp.text, "html.parser")
+    soup = BeautifulSoup(resp.text, "html.parser")
     return _parse_soup(soup)
 
 
@@ -85,10 +80,7 @@ def _scrape_playwright(url):
         page.goto(url, timeout=30000, wait_until="networkidle")
         content = page.content()
         browser.close()
-    try:
-        soup = BeautifulSoup(content, "lxml")
-    except Exception:
-        soup = BeautifulSoup(content, "html.parser")
+    soup = BeautifulSoup(content, "html.parser")
     return _parse_soup(soup)
 
 

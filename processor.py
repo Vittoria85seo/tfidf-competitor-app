@@ -126,7 +126,11 @@ def compute_tfidf(scraped_data, my_url, presence_threshold=0.3, custom_stopwords
             if any(t in sw for t in tokens):
                 continue
 
-            # Drop very short unigrams
+            # Drop tokens that are not purely alphabetic (filters codes, IDs, "qz1", "olg3" etc.)
+            if not all(re.match(r'^[^\W\d_]+$', t, re.UNICODE) for t in tokens):
+                continue
+
+            # Drop very short unigrams (less than 3 real letters)
             if ngram_range == (1, 1) and len(term) < 3:
                 continue
 
