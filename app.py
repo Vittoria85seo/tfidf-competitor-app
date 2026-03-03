@@ -134,8 +134,8 @@ if "df" in st.session_state:
     # Summary metrics
     n_missing = int((df["Found In My Page"] == "No").sum())
     n_underused = int(
-        (df["Found In My Page"] == "Yes") &
-        (df["Avg Mentions (Competitors)"] > df["Mentions (My Page)"])
+        ((df["Found In My Page"] == "Yes") &
+        (df["Avg Mentions (Competitors)"] > df["Mentions (My Page)"])).sum()
     )
     n_strong = int(
         (df["Mentions (My Page)"] >= df["Avg Mentions (Competitors)"]).sum()
