@@ -24,20 +24,28 @@ def translate_terms(terms):
     """
     Translate a list of keyword phrases to English.
     Returns a dict {original_term: english_translation}.
-    If translation matches original or fails, value is empty string.
+    Value is empty string only if the API returned nothing or raised an error.
     """
     if not terms:
         return {}
 
-    translator = GoogleTranslator(source="auto", target="en")
     results = {}
-
     for term in terms:
-        try:
-            translated = translator.translate(term)
-            results[term] = translated if translated and translated.lower() != term.lower() else ""
-            time.sleep(0.05)  # avoid rate limiting
-        except Exception:
-            results[term] = ""
+        translated = _translate_one(term)
+        results[term] = translated
+        time.sleep(0.05)  # avoid rate limiting
 
     return results
+
+
+def _translate_one(term, retries=2):
+    """Attempt translation with simple retry on failure."""
+    for attempt in range(retries + 1):
+        try:
+            translator = GoogleTranslator(source="auto", target="en")
+            result = translator.translate(term)
+            return result if result else ""
+        except Exception:
+            if attempt < retries:
+                time.sleep(0.3)
+    return ""

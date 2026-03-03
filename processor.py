@@ -1,7 +1,7 @@
 import re
 import pandas as pd
 import nltk
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 
 nltk.download("stopwords", quiet=True)
 from nltk.corpus import stopwords as nltk_stopwords
@@ -59,7 +59,7 @@ def _clean(text):
 
 def compute_tfidf(scraped_data, my_url, presence_threshold=0.3, custom_stopwords=None):
     """
-    Compute TF-IDF scores and return a ranked DataFrame.
+    Compute keyword analysis and return a ranked DataFrame.
 
     Parameters
     ----------
@@ -71,8 +71,8 @@ def compute_tfidf(scraped_data, my_url, presence_threshold=0.3, custom_stopwords
     Returns
     -------
     pd.DataFrame with columns:
-        Keyword / Phrase, N-gram Type, My TF-IDF Score,
-        Competitor Avg TF-IDF, Score Delta, % Competitors Using,
+        Keyword / Phrase, N-gram Type, Mentions (My Page),
+        Avg Mentions (Competitors), % Competitors Using,
         Found In My Page, _opportunity (bool, internal)
     """
     sw = _build_stopwords(custom_stopwords)
@@ -96,19 +96,28 @@ def compute_tfidf(scraped_data, my_url, presence_threshold=0.3, custom_stopwords
     rows = []
     for ngram_range, label in [((1, 1), "Unigram"), ((2, 2), "Bigram"), ((3, 3), "Trigram")]:
         try:
+            # TF-IDF used only for filtering (presence threshold via non-zero scores)
             vec = TfidfVectorizer(
                 ngram_range=ngram_range,
                 min_df=1,
                 max_features=10000,
                 sublinear_tf=True,
             )
-            matrix = vec.fit_transform(texts).toarray()
+            tfidf_matrix = vec.fit_transform(texts).toarray()
+
+            # CountVectorizer with the same vocabulary → raw mention counts
+            count_vec = CountVectorizer(
+                ngram_range=ngram_range,
+                vocabulary=vec.vocabulary_,
+            )
+            count_matrix = count_vec.transform(texts).toarray()
         except ValueError:
             continue
 
         terms = vec.get_feature_names_out()
-        my_scores = matrix[0]
-        comp_matrix = matrix[1:]  # shape: (n_competitors, n_terms)
+        comp_tfidf = tfidf_matrix[1:]   # for presence filtering
+        my_counts = count_matrix[0]
+        comp_counts = count_matrix[1:]  # shape: (n_competitors, n_terms)
 
         for i, term in enumerate(terms):
             tokens = term.split()
@@ -121,30 +130,30 @@ def compute_tfidf(scraped_data, my_url, presence_threshold=0.3, custom_stopwords
             if ngram_range == (1, 1) and len(term) < 3:
                 continue
 
-            comp_present = (comp_matrix[:, i] > 0).sum()
+            # Presence = fraction of competitor pages where term appears (count > 0)
+            comp_present = (comp_tfidf[:, i] > 0).sum()
             comp_presence_frac = comp_present / n_comp
             if comp_presence_frac < presence_threshold:
                 continue
 
-            comp_avg = float(comp_matrix[:, i].mean())
-            my_score = float(my_scores[i])
-            delta = comp_avg - my_score
-            found = my_score > 0
+            my_mention = int(my_counts[i])
+            avg_comp_mentions = round(float(comp_counts[:, i].mean()), 1)
+            found = my_mention > 0
 
             rows.append({
                 "Keyword / Phrase": term,
                 "N-gram Type": label,
-                "My TF-IDF Score": round(my_score, 4),
-                "Competitor Avg TF-IDF": round(comp_avg, 4),
-                "Score Delta": round(delta, 4),
+                "Mentions (My Page)": my_mention,
+                "Avg Mentions (Competitors)": avg_comp_mentions,
                 "% Competitors Using": round(comp_presence_frac * 100, 1),
                 "Found In My Page": "Yes" if found else "No",
-                "_opportunity": delta > 0.01 and not found,
+                "_opportunity": avg_comp_mentions > my_mention and avg_comp_mentions >= 1,
             })
 
     if not rows:
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
-    df = df.sort_values("Score Delta", ascending=False).reset_index(drop=True)
+    # Sort by competitor average mentions descending (most used by competitors first)
+    df = df.sort_values("Avg Mentions (Competitors)", ascending=False).reset_index(drop=True)
     return df

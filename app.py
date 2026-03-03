@@ -37,8 +37,8 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption(
-        "Red rows = competitors rank this term significantly higher than you.  \n"
-        "Green rows = you outperform competitors on this term."
+        "Red rows = competitors mention this term more than you.  \n"
+        "Green rows = you mention this term more than competitors."
     )
 
 # ── URL input ─────────────────────────────────────────────────────────────────
@@ -133,8 +133,13 @@ if "df" in st.session_state:
 
     # Summary metrics
     n_missing = int((df["Found In My Page"] == "No").sum())
-    n_underused = int(((df["Found In My Page"] == "Yes") & (df["Score Delta"] > 0)).sum())
-    n_strong = int((df["Score Delta"] <= 0).sum())
+    n_underused = int(
+        (df["Found In My Page"] == "Yes") &
+        (df["Avg Mentions (Competitors)"] > df["Mentions (My Page)"])
+    )
+    n_strong = int(
+        (df["Mentions (My Page)"] >= df["Avg Mentions (Competitors)"]).sum()
+    )
     n_total = len(df)
 
     c1, c2, c3, c4 = st.columns(4)
@@ -150,27 +155,20 @@ if "df" in st.session_state:
     def clean(frame):
         return frame.drop(columns=["_opportunity"], errors="ignore").copy()
 
-    # Styling: red = big gap, green = you lead
-    def _color_delta(val):
-        if not isinstance(val, (int, float)):
-            return ""
-        if val > 0.05:
-            return "background-color: #ffe0e0"
-        if val < -0.01:
-            return "background-color: #d4edda"
-        return ""
+    fmt = {"% Competitors Using": "{:.1f}%"}
 
-    fmt = {
-        "My TF-IDF Score": "{:.4f}",
-        "Competitor Avg TF-IDF": "{:.4f}",
-        "Score Delta": "{:.4f}",
-        "% Competitors Using": "{:.1f}%",
-    }
+    # Row colouring: red = competitors mention more, green = you mention more
+    def _color_row(row):
+        if row.get("Mentions (My Page)", 0) < row.get("Avg Mentions (Competitors)", 0):
+            return ["background-color: #ffe0e0"] * len(row)
+        if row.get("Mentions (My Page)", 0) > row.get("Avg Mentions (Competitors)", 0):
+            return ["background-color: #d4edda"] * len(row)
+        return [""] * len(row)
 
     with tab1:
-        st.subheader("Full TF-IDF Results")
+        st.subheader("Full Results")
         display = clean(df)
-        styled = display.style.applymap(_color_delta, subset=["Score Delta"]).format(fmt)
+        styled = display.style.apply(_color_row, axis=1).format(fmt)
         st.dataframe(styled, use_container_width=True, height=520)
 
         csv = display.to_csv(index=False).encode("utf-8")
@@ -188,38 +186,49 @@ if "df" in st.session_state:
             st.success("No gaps — your page covers all high-frequency competitor terms.")
         else:
             st.dataframe(
-                missing.style.applymap(_color_delta, subset=["Score Delta"]).format(fmt),
+                missing.style.apply(_color_row, axis=1).format(fmt),
                 use_container_width=True, height=400,
             )
 
-        st.subheader("Underused terms — present but weaker than competitors")
-        underused = clean(df[(df["Found In My Page"] == "Yes") & (df["Score Delta"] > 0)])
+        st.subheader("Underused terms — present but mentioned less than competitors")
+        underused = clean(df[
+            (df["Found In My Page"] == "Yes") &
+            (df["Avg Mentions (Competitors)"] > df["Mentions (My Page)"])
+        ])
         if underused.empty:
             st.info("No underused terms found.")
         else:
             st.dataframe(
-                underused.style.applymap(_color_delta, subset=["Score Delta"]).format(fmt),
+                underused.style.apply(_color_row, axis=1).format(fmt),
                 use_container_width=True, height=350,
             )
 
     with tab3:
-        st.subheader("Top 20 keyword gaps")
+        st.subheader("Top 20 terms by competitor usage")
         chart_df = df.head(20).copy()
         kw_col = "English Translation" if "English Translation" in chart_df.columns else "Keyword / Phrase"
-        chart_df["label"] = chart_df[kw_col].str[:35]
+        # Fall back to original phrase if English Translation is empty
+        chart_df["label"] = chart_df.apply(
+            lambda r: r[kw_col] if r.get(kw_col) else r["Keyword / Phrase"], axis=1
+        ).str[:35]
 
-        fig = px.bar(
-            chart_df,
-            x="Score Delta",
-            y="label",
-            orientation="h",
-            color="Score Delta",
-            color_continuous_scale=["#2ecc71", "#f39c12", "#e74c3c"],
-            labels={
-                "label": "Keyword",
-                "Score Delta": "Gap (Competitor Avg − Your Score)",
-            },
-            title="Positive = competitors use this term more than you",
+        # Melt into long format so we get two bars per term
+        chart_long = chart_df[["label", "Mentions (My Page)", "Avg Mentions (Competitors)"]].melt(
+            id_vars="label", var_name="Source", value_name="Mentions"
         )
-        fig.update_layout(yaxis={"autorange": "reversed"}, height=600)
+        fig = px.bar(
+            chart_long,
+            x="Mentions",
+            y="label",
+            color="Source",
+            orientation="h",
+            barmode="group",
+            color_discrete_map={
+                "Mentions (My Page)": "#3498db",
+                "Avg Mentions (Competitors)": "#e74c3c",
+            },
+            labels={"label": "Keyword", "Mentions": "Times mentioned"},
+            title="Your page (blue) vs competitor average (red)",
+        )
+        fig.update_layout(yaxis={"autorange": "reversed"}, height=600, legend_title="")
         st.plotly_chart(fig, use_container_width=True)
