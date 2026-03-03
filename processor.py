@@ -1,0 +1,150 @@
+import re
+import pandas as pd
+import nltk
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+nltk.download("stopwords", quiet=True)
+from nltk.corpus import stopwords as nltk_stopwords
+
+# UI / navigation words to always exclude
+UI_WORDS = {
+    "login", "logout", "account", "register", "sign", "signup", "signin",
+    "cart", "menu", "home", "search", "cookie", "cookies", "privacy", "terms",
+    "contact", "newsletter", "subscribe", "unsubscribe", "checkout",
+    "password", "username", "submit", "copyright", "sitemap", "faq", "help",
+    "facebook", "twitter", "instagram", "linkedin", "youtube", "pinterest",
+    "share", "follow", "like", "comment", "breadcrumb", "navigation",
+    "footer", "header", "sidebar", "widget", "popup", "modal",
+}
+
+# Prepositions (filter from unigrams)
+PREPOSITIONS = {
+    "about", "above", "across", "after", "against", "along", "among",
+    "around", "before", "behind", "below", "beneath", "beside", "between",
+    "beyond", "during", "except", "inside", "into", "near", "off", "onto",
+    "outside", "over", "past", "since", "through", "throughout", "till",
+    "toward", "under", "until", "upon", "within", "without",
+}
+
+# All NLTK language stopword lists to load
+NLTK_LANGS = [
+    "english", "italian", "french", "german", "spanish", "portuguese",
+    "dutch", "finnish", "swedish", "norwegian", "danish", "hungarian",
+    "romanian", "russian", "turkish",
+]
+
+
+def _build_stopwords(custom_words=None):
+    sw = set()
+    for lang in NLTK_LANGS:
+        try:
+            sw.update(nltk_stopwords.words(lang))
+        except Exception:
+            pass
+    sw.update(UI_WORDS)
+    sw.update(PREPOSITIONS)
+    if custom_words:
+        sw.update(w.strip().lower() for w in custom_words if w.strip())
+    return sw
+
+
+def _clean(text):
+    text = text.lower()
+    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = re.sub(r"\b\d+\b", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def compute_tfidf(scraped_data, my_url, presence_threshold=0.3, custom_stopwords=None):
+    """
+    Compute TF-IDF scores and return a ranked DataFrame.
+
+    Parameters
+    ----------
+    scraped_data : list of dicts (from scraper.scrape_url)
+    my_url : str — the user's page URL
+    presence_threshold : float — min fraction of competitor pages a term must appear on
+    custom_stopwords : list of str — extra words to exclude
+
+    Returns
+    -------
+    pd.DataFrame with columns:
+        Keyword / Phrase, N-gram Type, My TF-IDF Score,
+        Competitor Avg TF-IDF, Score Delta, % Competitors Using,
+        Found In My Page, _opportunity (bool, internal)
+    """
+    sw = _build_stopwords(custom_stopwords)
+
+    my_doc = next(
+        (d for d in scraped_data if d["url"] == my_url and not d.get("error")), None
+    )
+    if not my_doc:
+        raise ValueError(f"Could not scrape your URL: {my_url}")
+
+    comp_docs = [
+        d for d in scraped_data if d["url"] != my_url and not d.get("error")
+    ]
+    if not comp_docs:
+        raise ValueError("No competitor URLs were successfully scraped.")
+
+    n_comp = len(comp_docs)
+    all_docs = [my_doc] + comp_docs
+    texts = [_clean(d["combined"]) for d in all_docs]
+
+    rows = []
+    for ngram_range, label in [((1, 1), "Unigram"), ((2, 2), "Bigram"), ((3, 3), "Trigram")]:
+        try:
+            vec = TfidfVectorizer(
+                ngram_range=ngram_range,
+                min_df=1,
+                max_features=10000,
+                sublinear_tf=True,
+            )
+            matrix = vec.fit_transform(texts).toarray()
+        except ValueError:
+            continue
+
+        terms = vec.get_feature_names_out()
+        my_scores = matrix[0]
+        comp_matrix = matrix[1:]  # shape: (n_competitors, n_terms)
+
+        for i, term in enumerate(terms):
+            tokens = term.split()
+
+            # Drop any phrase where at least one token is a stopword
+            if any(t in sw for t in tokens):
+                continue
+
+            # Drop very short unigrams
+            if ngram_range == (1, 1) and len(term) < 3:
+                continue
+
+            comp_present = (comp_matrix[:, i] > 0).sum()
+            comp_presence_frac = comp_present / n_comp
+            if comp_presence_frac < presence_threshold:
+                continue
+
+            comp_avg = float(comp_matrix[:, i].mean())
+            my_score = float(my_scores[i])
+            delta = comp_avg - my_score
+            found = my_score > 0
+
+            rows.append({
+                "Keyword / Phrase": term,
+                "N-gram Type": label,
+                "My TF-IDF Score": round(my_score, 4),
+                "Competitor Avg TF-IDF": round(comp_avg, 4),
+                "Score Delta": round(delta, 4),
+                "% Competitors Using": round(comp_presence_frac * 100, 1),
+                "Found In My Page": "Yes" if found else "No",
+                "_opportunity": delta > 0.01 and not found,
+            })
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df = df.sort_values("Score Delta", ascending=False).reset_index(drop=True)
+    return df
