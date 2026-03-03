@@ -29,7 +29,7 @@ with st.sidebar:
         placeholder="e.g. brand, cityname, promo",
     )
 
-    top_n = st.slider("Max results to display", 10, 100, 50, step=10)
+    top_n = st.slider("Max unigrams to show (bigrams ≈ 60 %, trigrams ≈ 30 %)", 10, 100, 50, step=10)
 
     st.markdown("---")
     st.caption(
@@ -161,16 +161,14 @@ if run and scraped:
         )
         st.stop()
 
-    # Take a balanced slice from each n-gram type so bigrams/trigrams are visible
-    per_type = max(top_n // 3, 10)
-    df = (
-        pd.concat([
-            df[df["N-gram Type"] == ng].head(per_type)
-            for ng in ["Unigram", "Bigram", "Trigram"]
-        ])
-        .sort_values("Avg Mentions (Competitors)", ascending=False)
-        .reset_index(drop=True)
-    )
+    # Slice per n-gram type: 50 unigrams, ~60% bigrams, ~30% trigrams
+    n_bi = max(top_n * 3 // 5, 10)
+    n_tri = max(top_n * 3 // 10, 5)
+    df = pd.concat([
+        df[df["N-gram Type"] == "Unigram"].head(top_n),
+        df[df["N-gram Type"] == "Bigram"].head(n_bi),
+        df[df["N-gram Type"] == "Trigram"].head(n_tri),
+    ]).reset_index(drop=True)
 
     with st.spinner("Detecting languages…"):
         non_english = has_non_english(scraped)
@@ -229,12 +227,19 @@ if "df" in st.session_state:
         return [""] * len(row)
 
     with tab1:
-        st.subheader("Full Results")
-        display = clean(df)
-        styled = display.style.apply(_color_row, axis=1).format(fmt)
-        st.dataframe(styled, use_container_width=True, height=520)
+        for section_label, ng_type in [
+            ("Single words (unigrams)", "Unigram"),
+            ("2-word phrases (bigrams)", "Bigram"),
+            ("3-word phrases (trigrams)", "Trigram"),
+        ]:
+            sub = clean(df[df["N-gram Type"] == ng_type])
+            if sub.empty:
+                continue
+            st.subheader(section_label)
+            styled = sub.style.apply(_color_row, axis=1).format(fmt)
+            st.dataframe(styled, use_container_width=True, height=min(520, len(sub) * 35 + 60))
 
-        csv = display.to_csv(index=False).encode("utf-8")
+        csv = clean(df).to_csv(index=False).encode("utf-8")
         st.download_button(
             "Download CSV",
             data=csv,
